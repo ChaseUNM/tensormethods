@@ -395,28 +395,33 @@ function bug_integrator_itensor_magnet(H_ten, init_core, init_factors, t0, T, st
     return init_core_copy, init_factors_copy, magnet_scalar
 end
 
-function bug_integrator_itensor_ra_magnet(H_ten, init_core, init_factors, t0, T, steps, sites, magnet_site, cutoff)
+function bug_integrator_itensor_ra_magnet(H_ten, init_core, init_factors, t0, T, steps, sites, cutoff)
     h = (T - t0)/steps
     init_core_copy = copy(init_core)
     init_factors_copy = copy(init_factors) 
     N = length(init_factors)
     storage_arr = zeros(ComplexF64, (2^N, steps + 1))
-    m_core, m_factors = magnetization_tucker(sites, magnet_site)
     #Look specifically at magnetization observable
-    magnet_scalar = zeros(steps + 1)
-    magnet_scalar[1] = real(expect_tucker(m_core, m_factors, init_core, init_factors))
+    magnet_history = zeros(N, steps + 1)
+    # magnet_scalar[1] = real(expect_tucker(m_core, m_factors, init_core, init_factors))
     bd = zeros(N, steps + 1)
     bd[:,1] = get_links_tucker(init_core_copy)
-    @showprogress 1 "Evolving Tucker" for i in 1:steps 
+    @showprogress 1 "Evolving Tucker" for i in 1:steps + 1
         # println("Iteration $i")
+        for j in 1:N 
+            m_core, m_factors = magnetization_tucker(sites, N - j + 1)
+            magnet_history[j, i] = real(expect_tucker(m_core, m_factors, init_core_copy, init_factors_copy))
+        end
+        if i == steps + 1
+            break 
+        end
         C_1, update_U = bug_step_itensor_ra(H_ten, init_core_copy, init_factors_copy, h, sites, cutoff)
         bd[:,i + 1] = get_links_tucker(C_1)
         init_core_copy = copy(C_1)
         init_factors_copy = copy(update_U)
-        magnet_scalar[i + 1] = real(expect_tucker(m_core, m_factors, C_1, update_U))
 
     end
-    return init_core_copy, init_factors_copy, magnet_scalar, bd
+    return init_core_copy, init_factors_copy, magnet_history, bd
 end
 
 function init_separable(sites, q_state)

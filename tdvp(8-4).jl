@@ -74,6 +74,15 @@ end
 #Then checks if the conversion was correct by doing a multiplcation with this matrix and vector and checks against the tensor multiplication
 function conversion(H, M)
     H_contract = contract(H)
+    N = length(H)
+    H_contract2 = H[end]
+    for i in reverse(1:N-1)
+        H_contract2 = H_contract*H[i]
+    end
+    println("H_contract:")
+    display(H_contract)
+    println("H_contract2:")
+    display(H_contract2)
     #Gets indices of both tensors and determines which indices are matching and not matching
     H_inds = inds(H_contract)
     M_inds = inds(M)
@@ -885,7 +894,7 @@ function magnetization_MPO(sites, magnetization_site)
     return H
 end
 
-function tdvp2_constant_magnet(H, init, t0, T, steps, cutoff, magnet_site, verbose = false)
+function tdvp2_constant_magnet(H, init, t0, T, steps, cutoff, verbose = false)
     
     N = length(init)
     orthogonalize!(init, 1)
@@ -894,16 +903,20 @@ function tdvp2_constant_magnet(H, init, t0, T, steps, cutoff, magnet_site, verbo
     d = prod(dim(sites))
     #Get step size
     h = (T - t0)/steps
-    magnet_history = zeros(steps + 1)
+    magnet_history = zeros(N, steps + 1)
     # truncation_err = zeros(steps + 1)
     # truncation_err[1] = 0.0
     link_dim = zeros(N - 1, steps + 1)
     link_dim[:,1] = linkdims(init_copy)
-    m_mpo = magnetization_MPO(sites, magnet_site)
-    magnet_history[1] = expect(init, [1.0 0.0; 0.0 -1.0];sites = magnet_site)
     #Run time stepper
-    @showprogress 1 "TDVP2" for i = 1:steps
-        
+    @showprogress 1 "TDVP2" for i = 1:steps + 1
+        for j = 1:N 
+            magnet_site_rev = Int64(N - j + 1)
+            magnet_history[j,i] = expect(init_copy, [1.0 0.0; 0.0 -1.0]; sites = magnet_site_rev)
+        end
+        if i == steps + 1 
+            break
+        end
         init_copy = lr_sweep_2site(H, init_copy, h, cutoff)
         # println(length(init_copy))
         # truncation_err[i + 1] = err
@@ -911,7 +924,6 @@ function tdvp2_constant_magnet(H, init, t0, T, steps, cutoff, magnet_site, verbo
             println("Step: ", i)
             println("Link Dimensions at step $i: ", linkdims(init_copy))
         end
-        magnet_history[i + 1] = expect(init_copy, [1.0 0.0; 0.0 -1.0];sites = magnet_site)
         link_dim[:,i + 1] = linkdims(init_copy)
     end
     return init_copy, magnet_history, link_dim

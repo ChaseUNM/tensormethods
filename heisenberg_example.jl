@@ -13,7 +13,7 @@ ITensors.set_warn_order(20)
 #Define Hamiltonian 
 
 #Specify number of sites and create indices for sites
-N = 8
+N = 6
 sites = siteinds("Qubit", N)
 #Set parameters for Hamiltonian
 J = 1.0
@@ -29,33 +29,38 @@ H_MPO = graziani_H_MPO(N, sites, J, U, hj_list, hp_list)
 H_ten = ITensor(H, reverse(sites), reverse(sites)')
 
 #Specify initial state
-q_state = [0,0,0,0,1,1,1,1]
+q_state = [0,0,0,1,1,1]
 
 #Plots heatmap using TDVP2 method, compares evolution to matrix exponentiation
 function magnet_heatmap_TDVP2(t0,T, steps, cutoff)
     N = length(q_state)
     init = init_separable(sites, q_state)
     init_vec = ComplexF64.(vectorize_mps(init, order = "reverse"))
-    magnet_storage_exp = zeros(N, steps + 1)
-    magnet_storage_mps = zeros(N, steps + 1) 
+    magnet_history_exp = zeros(N, steps + 1)
     h = (T - t0)/steps
-    for i in 1:N
-        init_vec_copy = copy(init_vec)
-        m_mat = s_op(sz, N -i + 1, N)
-        magnet_storage_exp[i,1] = real(init_vec'*m_mat*init_vec)
-        @showprogress 1 "Matrix Exponentiation" for j in 1:steps 
-            evolve_vec = exp(-im*H*h)*init_vec_copy 
-            magnet_storage_exp[i,j + 1] = real(evolve_vec'*m_mat*evolve_vec)
-            init_vec_copy .= evolve_vec 
+    sol_op = exp(-im*H*h)
+    init_vec_copy = copy(init_vec)
+    # for i in 1:N 
+    #     magnet_mat = s_op(sz, N - i + 1, N)
+    #     magnet_storage_exp[i,1] = real(init_vec_copy'*magnet_mat*init_vec_copy)
+    # end
+    @showprogress 1 "Matrix Exponentiation" for j in 1:steps + 1
+        for i in 1:N
+            magnet_mat = s_op(sz, N - i + 1, N)
+            magnet_history_exp[i,j] = real(init_vec_copy'*magnet_mat*init_vec_copy)
         end
-        _,magnet_history,_ = tdvp2_constant_magnet(H_MPO, init, t0,T,steps, cutoff, N - i + 1)
-        magnet_storage_mps[i,:] = magnet_history
+        if j == steps + 1
+            break
+        end
+        init_vec_copy = sol_op*init_vec_copy
+        # init_vec_copy = exp(-im*H*h)*init_vec_copy
     end
+    _,magnet_history_mps,_ = tdvp2_constant_magnet(H_MPO, init, t0,T,steps, cutoff)
     x = LinRange(t0,T,steps + 1)
     y = collect(1:N)
-    h_plot_exp = heatmap(x, y, magnet_storage_exp, c=:bluesreds, ylabel = "Site Index", xlabel = "time", yflip = true; colorrange = (-1,1))
-    h_plot_mps = heatmap(x, y, magnet_storage_mps, c=:bluesreds, yflip = true; colorrange = (-1,1))
-    h_diff = heatmap(x, y, abs.(magnet_storage_exp - magnet_storage_mps), c=:bluesreds, yflip = true)
+    h_plot_exp = heatmap(x, y, magnet_history_exp, c=:bluesreds, ylabel = "Site Index", xlabel = "time", yflip = true; colorrange = (-1,1))
+    h_plot_mps = heatmap(x, y, magnet_history_mps, c=:bluesreds, yflip = true; colorrange = (-1,1))
+    h_diff = heatmap(x, y, abs.(magnet_history_exp - magnet_history_mps), c=:bluesreds, yflip = true)
     # h_diff = heatmap(abs.(magnet_storage_exp - magnet_storage_mps), yflip = true, c=:bluesreds,clims = (1E-8, 1E-4), colorbar_ticks = log10.([1E-9, 1E-8, 1E-7, 1E-6, 1E-5, 1E-4]))
     # display(magnet_storage_exp - magnet_storage_mps)
     # difference = abs.(x, y, magnet_storage_exp - magnet_storage_mps)
@@ -94,11 +99,53 @@ function magnet_heatmap_BUG(t0,T, steps, cutoff)
     return h_plot_exp, h_plot_tucker, h_diff
 end
 
+
+function magnet_heatmap(t0, T, steps, cutoff)
+    N = length(q_state)
+    init_mps = init_separable(sites, q_state)
+    init_vec = ComplexF64.(vectorize_mps(init_mps, order = "reverse"))
+    init_core, init_factors = tucker_separable(sites, q_state)
+    magnet_history_exp = zeros(N, steps + 1)
+    h = (T - t0)/steps
+    sol_op = exp(-im*H*h)
+    init_vec_copy = copy(init_vec)
+    # for i in 1:N 
+    #     magnet_mat = s_op(sz, N - i + 1, N)
+    #     magnet_storage_exp[i,1] = real(init_vec_copy'*magnet_mat*init_vec_copy)
+    # end
+    @showprogress 1 "Matrix Exponentiation" for j in 1:steps + 1
+        for i in 1:N
+            magnet_mat = s_op(sz, N - i + 1, N)
+            magnet_history_exp[i,j] = real(init_vec_copy'*magnet_mat*init_vec_copy)
+        end
+        if j == steps + 1
+            break
+        end
+        init_vec_copy = sol_op*init_vec_copy
+        # init_vec_copy = exp(-im*H*h)*init_vec_copy
+    end
+    _,magnet_history_mps,_ = tdvp2_constant_magnet(H_MPO, init_mps, t0,T,steps, cutoff)
+    _,_,magnet_history_tucker,_ = bug_integrator_itensor_ra_magnet(H_ten, init_core,init_factors, t0, T, steps, sites, cutoff)
+    return magnet_history_exp, magnet_history_mps, magnet_history_tucker 
+end
+
 t0 = 0.0
 T = 10.0
 steps = 2000
 cutoff = 0.0
 
-h1, h2, h3 = magnet_heatmap_BUG(t0,T,steps, cutoff)
+# h1, h2, h3 = magnet_heatmap_TDVP2(t0,T,steps, cutoff)
 
-total_plot = plot(h1, h2, h3, layout = (3, 1))
+# total_plot = plot(h1, h2, h3, layout = (3, 1))
+
+mag_exp, mag_mps, mag_tucker = magnet_heatmap(t0, T, steps, cutoff)
+
+x = LinRange(t0, T, steps + 1)
+y = collect(1:N)
+exp_heatmap = heatmap(x, y, mag_exp, c=:bluesreds, ylabel = "Site Index", xlabel = "time", yflip = true; colorrange = (-1,1))
+mps_heatmap = heatmap(x, y, mag_mps, c=:bluesreds, yflip = true; colorrange = (-1,1))
+tucker_heatmap = heatmap(x, y, mag_tucker, c=:bluesreds, yflip = true; colorrange = (-1,1))
+
+mps_diff = heatmap(x, y, abs.(mag_exp - mag_mps), c=:bluesreds, yflip = true)
+
+tucker_diff = heatmap(x, y, abs.(mag_exp - mag_tucker), c=:bluesreds, yflip = true)
