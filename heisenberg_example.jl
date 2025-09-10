@@ -1,5 +1,5 @@
 using ITensors, ITensorMPS, Plots, ProgressMeter
-pyplot()
+gr()
 
 include("hamiltonian(8-4).jl")
 include("BUG_tucker(8-27).jl")
@@ -13,7 +13,7 @@ ITensors.set_warn_order(20)
 #Define Hamiltonian 
 
 #Specify number of sites and create indices for sites
-N = 6
+N = 4
 sites = siteinds("Qubit", N)
 #Set parameters for Hamiltonian
 J = 1.0
@@ -29,7 +29,7 @@ H_MPO = graziani_H_MPO(N, sites, J, U, hj_list, hp_list)
 H_ten = ITensor(H, reverse(sites), reverse(sites)')
 
 #Specify initial state
-q_state = [0,0,0,1,1,1]
+q_state = [0,0,1,1]
 
 #Plots heatmap using TDVP2 method, compares evolution to matrix exponentiation
 function magnet_heatmap_TDVP2(t0,T, steps, cutoff)
@@ -148,4 +148,4 @@ tucker_heatmap = heatmap(x, y, mag_tucker, c=:bluesreds, yflip = true; colorrang
 
 mps_diff = heatmap(x, y, abs.(mag_exp - mag_mps), c=:bluesreds, yflip = true)
 
-tucker_diff = heatmap(x, y, abs.(mag_exp - mag_tucker), c=:bluesreds, yflip = true)
+# tucker_diff = heatmap(x, y, abs.(mag_exp - mag_tucker), c=:bluesreds, yflip = true)

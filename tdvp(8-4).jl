@@ -73,16 +73,20 @@ end
 #Converts both an effective Hamiltonian and tensor to a Matrix and vector, respectively
 #Then checks if the conversion was correct by doing a multiplcation with this matrix and vector and checks against the tensor multiplication
 function conversion(H, M)
+
     H_contract = contract(H)
-    N = length(H)
-    H_contract2 = H[end]
-    for i in reverse(1:N-1)
-        H_contract2 = H_contract*H[i]
-    end
-    println("H_contract:")
-    display(H_contract)
-    println("H_contract2:")
-    display(H_contract2)
+    # N = length(H)
+    # H_contract = H[end]
+    # for i in reverse(1:N-1)
+    #     H_contract = H_contract*H[i]
+    # end
+    # println("H_contract:")
+    # display(H_contract)
+    # println("H_contract2:")
+    # display(H_contract2)
+    # println("M block ")
+    # display(M)
+    # println("Tensor Difference: ", norm(H_contract - H_contract2))
     #Gets indices of both tensors and determines which indices are matching and not matching
     H_inds = inds(H_contract)
     M_inds = inds(M)
@@ -131,6 +135,45 @@ function conversion(H, M)
         println("Norm error: ", norm(mult1 - mult2))
         # return H_mat, M_vec
     end
+end
+
+function conversion_short(H,M)
+    N = length(H)
+    H_contract = H[end]
+    for i in reverse(1:N-1)
+        H_contract = H_contract*H[i]
+    end
+
+    comm_inds = commoninds(H_contract, M)
+    uncomm_inds = uniqueinds(H_contract, M)
+
+    combined_comm = combiner(comm_inds; tags = "Common")
+    combined_uncomm = combiner(uncomm_inds; tags = "Uncommon")
+
+    H_combined = H_contract*combined_comm*combined_uncomm
+    M_combined = M*combined_comm 
+
+    combined_comm_ind, combined_uncomm_ind = inds(H_combined)
+
+    H_arr = Array(H_combined, combined_comm_ind, combined_uncomm_ind)
+    M_vec = Array(M_combined, combined_comm_ind)
+
+    return H_arr, M_vec, comm_inds
+end
+
+#Get left indices and right indices
+function lr_inds(M, site_number)
+    l_inds = Index{Int64}[] 
+    r_inds = Index{Int64}[]
+    N = length(inds(M))
+    for i in 1:N
+        if hastags(inds(M)[i], "n = $site_number") == true || hastags(inds(M)[i], "l = $(site_number - 1)") == true
+            push!(l_inds, inds(M)[i])
+        else 
+            push!(r_inds, inds(M)[i])
+        end
+    end
+    return l_inds, r_inds 
 end
 
 #Creates effective Hamiltonian
@@ -605,6 +648,63 @@ function lr_sweep_2site_normal_err(H, M, h, cutoff, verbose)
 end
 
 #Performs a single left-to-right sweep of an MPS using the 2 site tdvp, evolving forward one time step.
+# function lr_sweep_2site(H, M, h, cutoff)
+    
+#     #Ensures orthogonalityu center is 1
+#     orthogonalize!(M, 1)
+#     N = length(M)
+#     for i in 1:N - 1 
+#         # println("Site $i")
+#         #Creates the 2-site Hamiltonian matrix and converts the 2 site M block (M[i]*M[i + 1]) to a vector
+#         H_eff_2 = effective_Hamiltonian_2site(H, M, i)
+#         M_block = M[i]*M[i + 1]
+#         H_mat_2, M_vec, comm_inds = conversion_short(H_eff_2, M_block)
+#         #Evolves the M block forward with the effective Hamiltonian and convert back into a tensor
+#         M_evolve = exp(-im*H_mat_2*h)*M_vec
+#         M_evolve = ITensor(M_evolve, comm_inds)
+#         display(M_evolve)
+#         #println("(Row, Col): ", size(H_mat_2))
+#         #Performs SVD on the M block to get new left-orthogonal tensor
+#         if i == 1
+#             if N > 2
+#                 bd = min(dim(M_inds[1]), dim(M_inds[2])*dim(M_inds[3]))
+#                 U_trunc, S_trunc, V_trunc = svd(M_evolve, M_inds[1], cutoff = cutoff)
+#             elseif N == 2 
+#                 bd = min(dim(M_inds[1]), dim(M_inds[2]))
+#                 U_trunc, S_trunc, V_trunc = svd(M_evolve, M_inds[1], cutoff = cutoff)
+#             end
+#         else
+#             if i != N - 1
+#                 bd = min(dim(M_inds[1])*dim(M_inds[2]),dim(M_inds[3])*dim(M_inds[4]))
+#             else 
+#                 bd = min(dim(M_inds[1])*dim(M_inds[2]),dim(M_inds[3]))
+#             end
+#             U_trunc, S_trunc, V_trunc = svd(M_evolve, M_inds[1:2], cutoff = cutoff)
+#         end
+#         #Set the i-th tensor in MPS to be U which is left-orthogonal
+#         M[i] = U_trunc
+#         M_n = S_trunc*V_trunc
+
+#         #If we're not on the last M block then evolve the (S*V) tensor with the effective Hamiltonian
+#         if i != N - 1
+#             M_n_inds = inds(M_n)
+            
+#             H_eff = effective_Hamiltonian(H, M, i + 1)
+#             H_mat, M2_vec, comm_inds = conversion_short(H_eff, M_n)
+
+#             M2_evolve = exp(im*H_mat*h)*M2_vec
+#             M2_evolve = ITensor(M2_evolve, comm_inds)
+#             # M2_evolve = IMR_MPS(H_eff, M[i+1], h)
+#             #Set next tensor to evolved (S*V) tensor
+#             M[i + 1] = M2_evolve
+#         elseif i == N - 1
+#             #If on last site no evolution takes places
+#             M[i + 1] = S_trunc*V_trunc
+#         end
+#     end
+#     return M
+# end
+
 function lr_sweep_2site(H, M, h, cutoff)
     
     #Ensures orthogonalityu center is 1
@@ -615,32 +715,17 @@ function lr_sweep_2site(H, M, h, cutoff)
         #Creates the 2-site Hamiltonian matrix and converts the 2 site M block (M[i]*M[i + 1]) to a vector
         H_eff_2 = effective_Hamiltonian_2site(H, M, i)
         M_block = M[i]*M[i + 1]
-        H_mat_2, M_vec = conversion(H_eff_2, M_block)
-        M_inds = inds(M_block)
-
+        H_mat_2, M_vec, comm_inds = conversion_short(H_eff_2, M_block)
         #Evolves the M block forward with the effective Hamiltonian and convert back into a tensor
         M_evolve = exp(-im*H_mat_2*h)*M_vec
-        M_evolve = ITensor(M_evolve, M_inds)
+        M_evolve = ITensor(M_evolve, comm_inds)
+        display(M_evolve)
+        l_inds, r_inds = lr_inds(M_evolve, i)
         #println("(Row, Col): ", size(H_mat_2))
-                
-
         #Performs SVD on the M block to get new left-orthogonal tensor
-        if i == 1
-            if N > 2
-                bd = min(dim(M_inds[1]), dim(M_inds[2])*dim(M_inds[3]))
-                U_trunc, S_trunc, V_trunc = svd(M_evolve, M_inds[1], cutoff = cutoff)
-            elseif N == 2 
-                bd = min(dim(M_inds[1]), dim(M_inds[2]))
-                U_trunc, S_trunc, V_trunc = svd(M_evolve, M_inds[1], cutoff = cutoff)
-            end
-        else
-            if i != N - 1
-                bd = min(dim(M_inds[1])*dim(M_inds[2]),dim(M_inds[3])*dim(M_inds[4]))
-            else 
-                bd = min(dim(M_inds[1])*dim(M_inds[2]),dim(M_inds[3]))
-            end
-            U_trunc, S_trunc, V_trunc = svd(M_evolve, M_inds[1:2], cutoff = cutoff)
-        end
+        bd = min(dim(l_inds), dim(r_inds))
+        U_trunc, S_trunc, V_trunc = svd(M_evolve, l_inds, cutoff = cutoff)
+
         #Set the i-th tensor in MPS to be U which is left-orthogonal
         M[i] = U_trunc
         M_n = S_trunc*V_trunc
@@ -648,11 +733,12 @@ function lr_sweep_2site(H, M, h, cutoff)
         #If we're not on the last M block then evolve the (S*V) tensor with the effective Hamiltonian
         if i != N - 1
             M_n_inds = inds(M_n)
+            
             H_eff = effective_Hamiltonian(H, M, i + 1)
-            H_mat, M2_vec = conversion(H_eff, M_n)
+            H_mat, M2_vec, comm_inds = conversion_short(H_eff, M_n)
 
             M2_evolve = exp(im*H_mat*h)*M2_vec
-            M2_evolve = ITensor(M2_evolve, M_n_inds)
+            M2_evolve = ITensor(M2_evolve, comm_inds)
             # M2_evolve = IMR_MPS(H_eff, M[i+1], h)
             #Set next tensor to evolved (S*V) tensor
             M[i + 1] = M2_evolve
@@ -918,6 +1004,9 @@ function tdvp2_constant_magnet(H, init, t0, T, steps, cutoff, verbose = false)
             break
         end
         init_copy = lr_sweep_2site(H, init_copy, h, cutoff)
+        println("init_copy")
+        display(init_copy)
+        linkdims(init_copy)
         # println(length(init_copy))
         # truncation_err[i + 1] = err
         if verbose == true

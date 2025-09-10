@@ -25,7 +25,7 @@ end
 function xxx(N, J, g)
     H = zeros(ComplexF64, (2^N, 2^N))
     for j in 1:N - 1
-        H .+= -J*s_op(sz, j, N)*s_op(sz, j + 1, N)
+        H .-= J*s_op(sz, j, N)*s_op(sz, j + 1, N)
     end
     for j in 1:N
         H .-= g*J*s_op(sx, j, N)

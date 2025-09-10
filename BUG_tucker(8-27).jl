@@ -33,7 +33,7 @@ Random.seed!(42)
 function create_linkinds(N::Int64, link_size::Vector{Int64})
     ind_vec = Index{Int64}[]
     for i in 1:N-1
-        ind = Index(link_size[i];tags="Link, $i \u2194 $(i + 1)")
+        ind = Index(link_size[i];tags="Link, $i")
         push!(ind_vec, ind)
     end
     return ind_vec
@@ -196,6 +196,15 @@ function conj_factors(factors)
     return factor_conj 
 end
 
+function conj_factors2(factors)
+    N = length(factors)
+    factor_conj = []
+    for i in 1:N 
+        push!(factor_conj,prime(conj(factors[i])))
+    end
+    return factor_conj 
+end
+
 function fixed_point_iter_C(H_ten, core, h, factor_matrices, maxiter, tol, verbose)
     core_inds = collect(inds(core))
     K_init = ITensor(ComplexF64, core_inds)
@@ -243,6 +252,8 @@ function bug_step_itensor(H_ten, core, factors, h, sites)
         Q = Q[:,1:row_S]
         V_T = Q'*factor_kron(factors_matrix_T, i)
         K0 = factors_matrix[i]*St' 
+        # println("K0: ")
+        # display(K0)
         Y0 = K0*V_T
         orig_order = collect(1:N)
         permutation = vcat([i], setdiff(orig_order, i))
@@ -251,6 +262,8 @@ function bug_step_itensor(H_ten, core, factors, h, sites)
         Y0_ten = ITensor(Y0, sites_copy2)
         Y0_dot = H_ten*Y0_ten
         Y0_dot_mat = matricization(Y0_dot, i)*V_T'
+        # println("K[$i] derivative")
+        # display(Y0_dot_mat)
         K1 = K0 - h*im*Y0_dot_mat
         row_K, col_K = size(K1) 
         U, R = qr(K1)
