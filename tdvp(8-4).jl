@@ -648,6 +648,65 @@ function lr_sweep_2site_normal_err(H, M, h, cutoff, verbose)
 end
 
 #Performs a single left-to-right sweep of an MPS using the 2 site tdvp, evolving forward one time step.
+function lr_sweep_2site(H, M, h, cutoff)
+    
+    #Ensures orthogonalityu center is 1
+    orthogonalize!(M, 1)
+    N = length(M)
+    for i in 1:N - 1 
+        # println("Site $i")
+        #Creates the 2-site Hamiltonian matrix and converts the 2 site M block (M[i]*M[i + 1]) to a vector
+        H_eff_2 = effective_Hamiltonian_2site(H, M, i)
+        M_block = M[i]*M[i + 1]
+        M_inds = inds(M_block)
+
+        H_mat_2, M_vec= conversion(H_eff_2, M_block)
+        #Evolves the M block forward with the effective Hamiltonian and convert back into a tensor
+        M_evolve = exp(-im*H_mat_2*h)*M_vec
+        M_evolve = ITensor(M_evolve, M_inds)
+        # display(M_evolve)
+        #println("(Row, Col): ", size(H_mat_2))
+        #Performs SVD on the M block to get new left-orthogonal tensor
+        if i == 1
+            if N > 2
+                bd = min(dim(M_inds[1]), dim(M_inds[2])*dim(M_inds[3]))
+                U_trunc, S_trunc, V_trunc = svd(M_evolve, M_inds[1], cutoff = cutoff)
+            elseif N == 2 
+                bd = min(dim(M_inds[1]), dim(M_inds[2]))
+                U_trunc, S_trunc, V_trunc = svd(M_evolve, M_inds[1], cutoff = cutoff)
+            end
+        else
+            if i != N - 1
+                bd = min(dim(M_inds[1])*dim(M_inds[2]),dim(M_inds[3])*dim(M_inds[4]))
+            else 
+                bd = min(dim(M_inds[1])*dim(M_inds[2]),dim(M_inds[3]))
+            end
+            U_trunc, S_trunc, V_trunc = svd(M_evolve, M_inds[1:2], cutoff = cutoff)
+        end
+        #Set the i-th tensor in MPS to be U which is left-orthogonal
+        M[i] = U_trunc
+        M_n = S_trunc*V_trunc
+
+        #If we're not on the last M block then evolve the (S*V) tensor with the effective Hamiltonian
+        if i != N - 1
+            M_n_inds = inds(M_n)
+            
+            H_eff = effective_Hamiltonian(H, M, i + 1)
+            H_mat, M2_vec = conversion(H_eff, M_n)
+
+            M2_evolve = exp(im*H_mat*h)*M2_vec
+            M2_evolve = ITensor(M2_evolve, M_n_inds)
+            # M2_evolve = IMR_MPS(H_eff, M[i+1], h)
+            #Set next tensor to evolved (S*V) tensor
+            M[i + 1] = M2_evolve
+        elseif i == N - 1
+            #If on last site no evolution takes places
+            M[i + 1] = S_trunc*V_trunc
+        end
+    end
+    return M
+end
+
 # function lr_sweep_2site(H, M, h, cutoff)
     
 #     #Ensures orthogonalityu center is 1
@@ -663,24 +722,12 @@ end
 #         M_evolve = exp(-im*H_mat_2*h)*M_vec
 #         M_evolve = ITensor(M_evolve, comm_inds)
 #         display(M_evolve)
+#         l_inds, r_inds = lr_inds(M_evolve, i)
 #         #println("(Row, Col): ", size(H_mat_2))
 #         #Performs SVD on the M block to get new left-orthogonal tensor
-#         if i == 1
-#             if N > 2
-#                 bd = min(dim(M_inds[1]), dim(M_inds[2])*dim(M_inds[3]))
-#                 U_trunc, S_trunc, V_trunc = svd(M_evolve, M_inds[1], cutoff = cutoff)
-#             elseif N == 2 
-#                 bd = min(dim(M_inds[1]), dim(M_inds[2]))
-#                 U_trunc, S_trunc, V_trunc = svd(M_evolve, M_inds[1], cutoff = cutoff)
-#             end
-#         else
-#             if i != N - 1
-#                 bd = min(dim(M_inds[1])*dim(M_inds[2]),dim(M_inds[3])*dim(M_inds[4]))
-#             else 
-#                 bd = min(dim(M_inds[1])*dim(M_inds[2]),dim(M_inds[3]))
-#             end
-#             U_trunc, S_trunc, V_trunc = svd(M_evolve, M_inds[1:2], cutoff = cutoff)
-#         end
+#         bd = min(dim(l_inds), dim(r_inds))
+#         U_trunc, S_trunc, V_trunc = svd(M_evolve, l_inds, cutoff = cutoff)
+
 #         #Set the i-th tensor in MPS to be U which is left-orthogonal
 #         M[i] = U_trunc
 #         M_n = S_trunc*V_trunc
@@ -704,51 +751,6 @@ end
 #     end
 #     return M
 # end
-
-function lr_sweep_2site(H, M, h, cutoff)
-    
-    #Ensures orthogonalityu center is 1
-    orthogonalize!(M, 1)
-    N = length(M)
-    for i in 1:N - 1 
-        # println("Site $i")
-        #Creates the 2-site Hamiltonian matrix and converts the 2 site M block (M[i]*M[i + 1]) to a vector
-        H_eff_2 = effective_Hamiltonian_2site(H, M, i)
-        M_block = M[i]*M[i + 1]
-        H_mat_2, M_vec, comm_inds = conversion_short(H_eff_2, M_block)
-        #Evolves the M block forward with the effective Hamiltonian and convert back into a tensor
-        M_evolve = exp(-im*H_mat_2*h)*M_vec
-        M_evolve = ITensor(M_evolve, comm_inds)
-        display(M_evolve)
-        l_inds, r_inds = lr_inds(M_evolve, i)
-        #println("(Row, Col): ", size(H_mat_2))
-        #Performs SVD on the M block to get new left-orthogonal tensor
-        bd = min(dim(l_inds), dim(r_inds))
-        U_trunc, S_trunc, V_trunc = svd(M_evolve, l_inds, cutoff = cutoff)
-
-        #Set the i-th tensor in MPS to be U which is left-orthogonal
-        M[i] = U_trunc
-        M_n = S_trunc*V_trunc
-
-        #If we're not on the last M block then evolve the (S*V) tensor with the effective Hamiltonian
-        if i != N - 1
-            M_n_inds = inds(M_n)
-            
-            H_eff = effective_Hamiltonian(H, M, i + 1)
-            H_mat, M2_vec, comm_inds = conversion_short(H_eff, M_n)
-
-            M2_evolve = exp(im*H_mat*h)*M2_vec
-            M2_evolve = ITensor(M2_evolve, comm_inds)
-            # M2_evolve = IMR_MPS(H_eff, M[i+1], h)
-            #Set next tensor to evolved (S*V) tensor
-            M[i + 1] = M2_evolve
-        elseif i == N - 1
-            #If on last site no evolution takes places
-            M[i + 1] = S_trunc*V_trunc
-        end
-    end
-    return M
-end
 
 function lr_sweep_2site_normal(H, M, h, cutoff)
     
@@ -1004,15 +1006,16 @@ function tdvp2_constant_magnet(H, init, t0, T, steps, cutoff, verbose = false)
             break
         end
         init_copy = lr_sweep_2site(H, init_copy, h, cutoff)
-        println("init_copy")
-        display(init_copy)
-        linkdims(init_copy)
+        # println("init_copy")
+        # display(init_copy)
+        # linkdims(init_copy)
         # println(length(init_copy))
         # truncation_err[i + 1] = err
         if verbose == true
             println("Step: ", i)
             println("Link Dimensions at step $i: ", linkdims(init_copy))
         end
+        # println(linkdims(init_copy))
         link_dim[:,i + 1] = linkdims(init_copy)
     end
     return init_copy, magnet_history, link_dim

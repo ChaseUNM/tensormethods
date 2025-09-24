@@ -1,7 +1,9 @@
-using LinearAlgebra, ITensors, ProgressMeter, BenchmarkTools
+using LinearAlgebra, ITensors, ProgressMeter, BenchmarkTools, Random 
 
+Random.seed!(42)
 include("BUG_tucker(8-27).jl")
 include("Hamiltonian.jl")
+include("Tucker_Matrices.jl")
 #Pratice BUG but don't form any large matrices
 sz = [1 0; 0 -1]
 sx = [0 1; 1 0]
@@ -11,26 +13,21 @@ function op_itensor(op, sites, ind)
     return ITensor(op, sites[ind], sites[ind]')
 end
 
-N = 3
-A = rand(2^N)
-sites = siteinds("Qubit", N)
-cutoff = 1.0
 
-core, factors = tucker_itensor(A, sites; cutoff = cutoff)
 
 #Let H the xxx hamiltonian with J = -1, g = 1
 
-core_inds = inds(core)
-Q1, S1 = qr(core, core_inds[2], core_inds[3])
-Q2, S2 = qr(core, core_inds[1], core_inds[3])
-Q3, S3 = qr(core, core_inds[1], core_inds[2])
+# core_inds = inds(core)
+# Q1, S1 = qr(core, core_inds[2], core_inds[3])
+# Q2, S2 = qr(core, core_inds[1], core_inds[3])
+# Q3, S3 = qr(core, core_inds[1], core_inds[2])
 
-K1 = factors[1]*S1 
-K2 = factors[2]*S2 
-K3 = factors[3]*S3
+# K1 = factors[1]*S1 
+# K2 = factors[2]*S2 
+# K3 = factors[3]*S3
 
 function applyH_tucker(op_list, Q, factors, site)
-    core_inds = inds(core)
+    # core_inds = inds(core)
     # not_site = setdiff(core_inds, [core_inds[site]])
     # Q, R = qr(core, not_site)
     new_factors = [] 
@@ -45,7 +42,38 @@ function applyH_tucker(op_list, Q, factors, site)
             push!(new_factors, op_list[i]*factors[i])
         else 
             # display(conj(factors[i]')*op_list[i]*factors[i])
-            push!(new_factors, factors[i]*op_list[i]*conj(factors[i]'))
+            push!(new_factors, conj(factors[i]')*op_list[i]*factors[i])
+        end
+        # println("New factors: ")
+        # println(new_factors)
+    end
+    return new_factors 
+end
+
+function applyH_mat(op_list, factors, site)
+    # core_inds = inds(core)
+    # not_site = setdiff(core_inds, [core_inds[site]])
+    # Q, R = qr(core, not_site)
+    # Preallocate new_factors with known sizes for efficiency
+    new_factors = [zeros(eltype(factors[i]), size(factors[i], 2), size(factors[i], 2)) for i in 1:length(factors)]
+    # Adjust size for the selected site, since op_list[site]*factors[site] changes shape
+    new_factors[site] = zeros(eltype(factors[site]), size(op_list[site], 1), size(factors[site], 2))
+    temp_factors = [zeros(eltype(factors[i]), size(factors[i], 2), size(factors[i], 2)) for i in 1:length(factors)]
+    N = length(factors)
+    # println("N: $N")
+    for i = 1:N
+        # println("i: $i")
+        if i == site
+            # display(op_list[i])
+            # display(factors[i])
+            # println(op_list[i]*factors[i]) 
+            # new_factors[i] = op_list[i]*factors[i]
+            mul!(new_factors[i], op_list[i], factors[i])
+        else 
+            # display(conj(factors[i]')*op_list[i]*factors[i])
+            # new_factors[i] = (op_list[i]*factors[i])'*factors[i]
+            mul!(temp_factors[i], op_list[i], factors[i])
+            mul!(new_factors[i], (temp_factors[i])', factors[i])
         end
         # println("New factors: ")
         # println(new_factors)
@@ -121,20 +149,36 @@ end
 
 function xxx_ops(N,J,g)
     op_list = [] 
-    #create zz chain
+    # create zz chain
     for i in 1:N-1
-        ops = [Ident for _ in 1:N]
-        ops[i] = -J*sz 
-        ops[i + 1] = sz
+        ops = [ComplexF64.(Ident) for _ in 1:N]
+        ops[i] = ComplexF64.(-J*sz) 
+        ops[i + 1] = ComplexF64.(sz)
         push!(op_list, ops)
     end
     #create the x chain
-    for i in 1:N 
-        ops = [Ident for _ in 1:N]
-        ops[i] = -g*J*sx
-        push!(op_list, ops)
+    if g != 0.0
+        for i in 1:N 
+            ops = [ComplexF64.(Ident) for _ in 1:N]
+            ops[i] = ComplexF64.(-g*J*sx)
+            push!(op_list, ops)
+        end
     end
     return op_list
+end
+
+function ops_ex_3(a, b, c)
+    op_list = []
+    for i in 1:1 
+        ops = [a, b, c]
+        push!(op_list, ops)
+    end
+    return op_list 
+end
+
+function identity_ops(N)
+    ops = [Ident for _ in 1:N]
+    return ops 
 end
 
 function total_H_itensor(op_list_list, sites)
@@ -181,6 +225,7 @@ function K_evolution_itensor(core,factors,site, K, total_H,sites)
     factors_intermediate[site] = K_ten
 
     N_ops = length(total_H)
+    
     new_factors = applyH_tucker(total_H[1], Q, factors_intermediate, site)
     # println("Q")
     # display(Q)
@@ -188,13 +233,116 @@ function K_evolution_itensor(core,factors,site, K, total_H,sites)
     # display(factors_intermediate)
     init = reconstruct(Q, new_factors)
     # display(init)
+    # @time begin 
+    for i in 2:N_ops 
+        new_factors = applyH_tucker(total_H[i], Q, factors_intermediate, site)
+        init += reconstruct(Q, new_factors)
+    # end
+    # display(init)
+    K_dot = init*conj(Q')
+    end
+    return K_dot, K_ten
+end
+
+function K_evolution_itensor(core,factors,site, total_H, sites)
+    core_inds = inds(core)
+    not_site_inds = setdiff(core_inds, [core_inds[site]])
+    Q, S = qr(core, not_site_inds)
+    K_ten = factors[site]*S
+    # println("K_ten")
+    # println(K_ten)
+    factors_copy = copy(factors)
+    factors_intermediate = factors_copy 
+    # K_inds = inds(factors[site]*S)
+    # K_ten = ITensor(K, K_inds)
+    factors_intermediate[site] = K_ten
+
+    N_ops = length(total_H)
+    # println("N_ops: $N_ops")
+    new_factors = applyH_tucker(total_H[1], Q, factors_intermediate, site)
+    # println("Tensor Factors: ")
+    # for i in 1:length(factors)
+    #     println("Factor $i: ")
+    #     display(Array(new_factors[i], inds(new_factors[i])))
+    # end
+    # println("Q")
+    # display(Q)
+    # println("factors_intermediate")
+    # display(factors_intermediate)
+    init = reconstruct(Q, new_factors)
+    # println("Q: ")
+    # display(Array(Q, inds(Q)))
+    # println(Q)
+    # display(Array(init, inds(init)))
+    # println("Ten Q*factor2: ")
+    # ans_temp = Q*new_factors[1]
+    # ans_inds = inds(ans_temp)
+    # println(Q)
+    # println(ans_temp)
+    # println(Q*new_factors[2])
+    # display(Array(Q*new_factors[2], inds(Q*new_factors[2])))
+    # @time begin 
     for i in 2:N_ops 
         new_factors = applyH_tucker(total_H[i], Q, factors_intermediate, site)
         init += reconstruct(Q, new_factors)
     end
     # display(init)
-    K_dot = init*conj(Q')
-    return K_dot
+    K_dot = noprime(init*conj(Q'))
+    # end
+    return K_dot, K_ten
+end
+
+function K_evolution_mat(core,factors,site, total_H, M_list, P_list, Y_list)
+    # core_inds = inds(core)
+    # not_site_inds = setdiff(core_inds, [core_inds[site]])
+    # Q, S = qr(core, not_site_inds)
+    Q, S = qr(transpose(matricization(core, site)))
+    Q = Array(Q)[:,1:size(core, site)]
+    Q_ten = refold_mat(Array(transpose(Q)), size(core), site)
+
+    K = factors[site]*transpose(S)
+    # K_ten = factors[site]*S
+    # println("K_ten")
+    # println(K_ten)
+    factors_copy = copy(factors)
+    factors_intermediate = factors_copy 
+    # K_inds = inds(factors[site]*S)
+    # K_ten = ITensor(K, K_inds)
+    factors_intermediate[site] = K
+
+    N_ops = length(total_H)
+    new_factors = applyH_mat(total_H[1], factors_intermediate, site)
+    # println("Matrix Factors: ")
+    # for i in 1:length(factors)
+    #     println("Factor $i: ")
+    #     display(new_factors[i])
+    # end
+    # println("Q")
+    # display(Q)
+    # println("factors_intermediate")
+    # display(factors_intermediate)
+    init = zeros(ComplexF64, size(core)...)
+    init .= Multi_TTM_allocate_recursive(Q_ten, new_factors, M_list, P_list, Y_list)
+    # init .= Multi_TTM(Q_ten, new_factors)
+    # println("Q: ")
+    # display(Q_ten)
+    # println("Init:")
+    # display(init)
+    # println("Arr Q*factor2: ")
+    # display(TTM(Q_ten, new_factors[1], 1))
+    # @time begin 
+    for i in 2:N_ops
+        new_factors = applyH_mat(total_H[i], factors_intermediate, site)
+        init .+= Multi_TTM_allocate_recursive(Q_ten, new_factors, M_list, P_list, Y_list)
+        # init .+= Multi_TTM(Q_ten, new_factors)
+    end
+    # display(init)
+    # println("Mat_i Init size: ", size(matricization(init, site)))
+    # println("Q' size: ", size(Q))
+    K_dot = matricization(init, site)*conj(Q)
+    # end
+    # return K_dot, K, new_factors, Q_ten
+    return K_dot, K
 end
 
 function C_dot_itensor(core, factors, total_H, sites)
@@ -205,40 +353,429 @@ function C_dot_itensor(core, factors, total_H, sites)
     init = ITensor(desired_inds)
     new_factors = []
     new_factors = Array{Any}(undef, N_factors)
-    reconstruct_time = 0.0
-    factor_multiple_time1 = 0.0
-    factor_multiple_time2 = 0.0
+    # factor_multiple_time1 = 0.0
+    # factor_multiple_time2 = 0.0
     for i in 1:N_ops 
         for j in 1:N_factors 
             # new_factor = mat_factors[j]'*Array(total_H[i][j], inds(total_H[i][j]))*mat_factors[j]
             # println(new_factor)
             # new_factors[j] = ITensor(new_factor, inds(core)[j], inds(core)[j]')
-            mult_elapsed = @elapsed begin
-                new_factors[j] = ITensor(mat_factors[j]'*Array(total_H[i][j], inds(total_H[i][j]))*mat_factors[j] , inds(core)[j], inds(core)[j]')
-            # new_factors[j] = conj(factors[j]')*total_H[i][j]*factors[j]
-            end
-            mult_elapsed2 = @elapsed begin 
-                new_factors[j] = conj(factors[j]')*total_H[i][j]*factors[j]
-            end
-            factor_multiple_time1 += mult_elapsed
-            factor_multiple_time2 += mult_elapsed2
+            # mult_elapsed = @elapsed begin
+            #     new_factors[j] = ITensor(mat_factors[j]'*Array(total_H[i][j], inds(total_H[i][j]))*mat_factors[j] , inds(core)[j], inds(core)[j]')
+            # # new_factors[j] = conj(factors[j]')*total_H[i][j]*factors[j]
+            # end
+            # @time begin 
+            new_factors[j] = conj(factors[j]')*total_H[i][j]*factors[j]
+            # end
+            # factor_multiple_time1 += mult_elapsed
+            # factor_multiple_time2 += mult_elapsed2
             # push!(new_factors, conj(factors[j]')*total_H[i][j]*factors[j])
         end
         # println(core)
         # println(new_factors)
-        time_elapsed = @elapsed begin     
+        # time_elapsed = @elapsed begin
         init += reconstruct(core, new_factors)
-        end
-        reconstruct_time += time_elapsed
+        # reconstruct_time += time_elapsed
     end
     # display(new_factors)
-    return init, reconstruct_time, factor_multiple_time1, factor_multiple_time2
+    return init
+end
+
+function C_dot_itensor_im(core, factors, total_H, sites)
+    N_ops = length(total_H)
+    N_factors = length(factors)
+    mat_factors = matricize_factors(factors)
+    desired_inds = prime(inds(core))
+    init = ITensor(desired_inds)
+    new_factors = []
+    new_factors = Array{Any}(undef, N_factors)
+    # factor_multiple_time1 = 0.0
+    # factor_multiple_time2 = 0.0
+    for i in 1:N_ops 
+        for j in 1:N_factors 
+            # new_factor = mat_factors[j]'*Array(total_H[i][j], inds(total_H[i][j]))*mat_factors[j]
+            # println(new_factor)
+            # new_factors[j] = ITensor(new_factor, inds(core)[j], inds(core)[j]')
+            # mult_elapsed = @elapsed begin
+            #     new_factors[j] = ITensor(mat_factors[j]'*Array(total_H[i][j], inds(total_H[i][j]))*mat_factors[j] , inds(core)[j], inds(core)[j]')
+            # # new_factors[j] = conj(factors[j]')*total_H[i][j]*factors[j]
+            # end
+            # @time begin 
+            new_factors[j] = conj(factors[j]')*total_H[i][j]*factors[j]
+            # println("Factor $j")
+            # println(factors[j]')
+            # println(factors[j])
+            # println(total_H[i][j])
+            # println(new_factors[j])
+            # println("LOOK HERE")
+            # display(new_factors[j])
+            # end
+            # factor_multiple_time1 += mult_elapsed
+            # factor_multiple_time2 += mult_elapsed2
+            # push!(new_factors, conj(factors[j]')*total_H[i][j]*factors[j])
+        end
+        # println(core)
+        # println(new_factors)
+        # time_elapsed = @elapsed begin
+        # println("LOOK HERE NOW")
+        # display(core)
+        # @time begin 
+        init += -im*reconstruct(core, new_factors)
+        # end
+        # reconstruct_time += time_elapsed
+    end
+    return noprime(init)
+end
+
+function C_dot_itensor_im(core, factors, alloc_arr, total_H, sites)
+    N_ops = length(total_H)
+    N_factors = length(factors)
+    mat_factors = matricize_factors(factors)
+    desired_inds = inds(core)
+    init = ITensor(desired_inds)
+    new_factors = []
+    new_factors = Array{Any}(undef, N_factors)
+    # factor_multiple_time1 = 0.0
+    # factor_multiple_time2 = 0.0
+    for i in 1:N_ops 
+        for j in 1:N_factors 
+            # new_factor = mat_factors[j]'*Array(total_H[i][j], inds(total_H[i][j]))*mat_factors[j]
+            # println(new_factor)
+            # new_factors[j] = ITensor(new_factor, inds(core)[j], inds(core)[j]')
+            # mult_elapsed = @elapsed begin
+            #     new_factors[j] = ITensor(mat_factors[j]'*Array(total_H[i][j], inds(total_H[i][j]))*mat_factors[j] , inds(core)[j], inds(core)[j]')
+            # # new_factors[j] = conj(factors[j]')*total_H[i][j]*factors[j]
+            # end
+            # @time begin 
+            new_factors[j] = conj(factors[j]')*total_H[i][j]*factors[j]
+            # println("Factor $j")
+            # println(factors[j]')
+            # println(factors[j])
+            # println(total_H[i][j])
+            # println(new_factors[j])
+            # println("LOOK HERE")
+            # display(new_factors[j])
+            # end
+            # factor_multiple_time1 += mult_elapsed
+            # factor_multiple_time2 += mult_elapsed2
+            # push!(new_factors, conj(factors[j]')*total_H[i][j]*factors[j])
+        end
+        # println(core)
+        # println(new_factors)
+        # time_elapsed = @elapsed begin
+        # println("LOOK HERE NOW")
+        # display(core)
+        # @time begin 
+        # init += -im*reconstruct(core, new_factors)
+        Multi_TTM!(core, new_factors, alloc_arr)
+        init += alloc_arr[end]
+        # end
+        # reconstruct_time += time_elapsed
+    end
+    return noprime(init)
+end
+
+function C_dot_im_mat(core, factors, total_H, Ms, Ps, Ys)
+    N_ops = length(total_H)
+    # println("N_ops: $N_ops")
+    N_factors = length(factors)
+    # desired_inds = prime(inds(core))
+    # init = ITensor(desired_inds)
+    init = zeros(eltype(core), size(core)...)
+    # init = rand(eltype(core), size(core)...)
+    # new_factors = []
+    # new_factors = Vector{AbstractMatrix}(undef, N_factors)
+    new_factors = [zeros(eltype(factors[i]), size(factors[i], 2), size(factors[i], 2)) for i in 1:length(factors)]
+    temp_factors = [zeros(eltype(factors[i]), size(factors[i], 2), size(factors[i], 2)) for i in 1:length(factors)]
+    # factor_multiple_time1 = 0.0
+    # factor_multiple_time2 = 0.0
+    # a = zeros(eltype(core), size(core)...)
+    # b = zeros(eltype(core), size(core)...)
+    # c = zeros(eltype(core), size(core)...)
+    # factors_copy = copy(factors)
+    # core_copy = copy(core)
+    for i in 1:N_ops 
+        for j in 1:N_factors 
+            # new_factor = mat_factors[j]'*Array(total_H[i][j], inds(total_H[i][j]))*mat_factors[j]
+            # println(new_factor)
+            # new_factors[j] = ITensor(new_factor, inds(core)[j], inds(core)[j]')
+            # mult_elapsed = @elapsed begin
+            #     new_factors[j] = ITensor(mat_factors[j]'*Array(total_H[i][j], inds(total_H[i][j]))*mat_factors[j] , inds(core)[j], inds(core)[j]')
+            # # new_factors[j] = conj(factors[j]')*total_H[i][j]*factors[j]
+            # end
+            # @time begin 
+            # new_factors[j] = factors[j]'*total_H[i][j]*factors[j]
+            # new_factors[j] = (total_H[i][j]*factors[j])'*factors[j]
+            # @time begin
+            # temp_factors = [zeros(eltype(factors[i]), size(factors[i], 2), size(factors[i], 2)) for i in 1:length(factors)] 
+            mul!(temp_factors[j], total_H[i][j], factors[j])
+            mul!(new_factors[j], temp_factors[j]', factors[j])
+            # end
+            # display(total_H[i][j])
+            # println("Factor $j")
+            # println(factors[j]')
+            # println(factors[j])
+            # println(total_H[i][j])
+            # println(new_factors[j])
+            # println("LOOK HERE")
+            # display(new_factors[j])
+            # end
+            # factor_multiple_time1 += mult_elapsed
+            # factor_multiple_time2 += mult_elapsed2
+            # push!(new_factors, conj(factors[j]')*total_H[i][j]*factors[j])
+        end
+        # println(core)
+        # println(new_factors)
+        # time_elapsed = @elapsed begin
+        # println("LOOK HERE NOW")
+        # display(core)
+        # @time begin
+        # init .+= -im*Multi_TTM_allocate_recursive(core, new_factors, M_list, P_list, Y_list)
+        # init .+= -im*Multi_TTM_recursive(core, new_factors)
+        # println("Core Before: ")
+        # display(core)
+
+        # a .+= -im*Multi_TTM_allocate_recursive(core, new_factors, M_list, P_list, Y_list)
+        # display(-im*Multi_TTM_allocate_recursive(core, new_factors, M_list, P_list, Y_list))
+        # println("Core after: ")
+        # display(core)
+        # println("Factor 1 after")
+        # display(new_factors[3])
+        # println("Correct")
+        init .+= -im*Multi_TTM_recursive(core, new_factors)
+        # println("Core before: ")
+        # display(core)
+        # a .+= -im*Multi_TTM_allocate_recursive(core, new_factors, M_list, P_list, Y_list)
+        # println("a: ")
+        # display(-im*Multi_TTM_allocate_recursive(core, new_factors, Ms, Ps, Ys))
+        # display(TTM_allocate(core, new_factors[1], Ms[1], Ps[1], Ys[1], 1))
+        # b .+= -im*Multi_TTM_recursive(core, new_factors)
+        # println("b")
+        # display(-im*Multi_TTM_recursive(core, new_factors))
+        # display(TTM(core, new_factors[1], 1))
+        # c .+= -im*Multi_TTM(core, new_factors)
+        # println("c")
+        # display(-im*Multi_TTM(core, new_factors))
+        # println("norm: ", norm(a - b))
+        # println("norm: ", norm(b - c))
+        # println("norm: ", norm(a - c))
+        # init .+= -im*Multi_TTM_allocate_recursive(core, new_factors, M_list, P_list, Y_list)
+        # println("Core after")
+        # display(core)
+        # println("Sum here")
+        # display(init)
+        # a = -im*Multi_TTM_allocate(core, new_factors, M_list, P_list, Y_list)
+        # println("Incorrect")
+        # a .+= -im*Multi_TTM_allocate(core, new_factors, M_list, P_list, Y_list)
+        # println("Look here")
+        # println("Difference: ", norm(a - b))
+        # end
+        # init .+= -im*Multi_TTM(core, new_factors)
+        # reconstruct_time += time_elapsed
+    end
+    return init
 end
 
 
+function tensorize_factors(factors, inds)
+    arr = []
+    for i in 1:length(factors)
+        push!(arr, ITensor(factors[i], inds[i], inds[i]'))
+    end
+    return arr 
+end
+
+function C_dot_itensor_eff(core, factors, total_H, total_H_arr, sites)
+    N_ops = length(total_H)
+    N_factors = length(factors)
+    mat_factors = matricize_factors(factors)
+    desired_inds = prime(inds(core))
+    # println("Desired inds: ")
+    # println(desired_inds)
+    init = ITensor(desired_inds)
+    new_factors = []
+    new_factors = Array{Any}(undef, N_factors)
+    # factor_multiple_time1 = 0.0
+    # factor_multiple_time2 = 0.0
+    for i in 1:N_ops 
+        for j in 1:N_factors 
+            # new_factor = mat_factors[j]'*Array(total_H[i][j], inds(total_H[i][j]))*mat_factors[j]
+            # println(new_factor)
+            # new_factors[j] = ITensor(new_factor, inds(core)[j], inds(core)[j]')
+            # mult_elapsed = @elapsed begin
+            #     new_factors[j] = ITensor(mat_factors[j]'*Array(total_H[i][j], inds(total_H[i][j]))*mat_factors[j] , inds(core)[j], inds(core)[j]')
+            # # new_factors[j] = conj(factors[j]')*total_H[i][j]*factors[j]
+            # end
+            # @time begin 
+            # display(conj(factors[j]')*total_H[i][j]*factors[j])
+            # end
+            # @time begin 
+            new_factors[j] = mat_factors[j]'*total_H_arr[i][j]*mat_factors[j]
+            # end
+            # factor_multiple_time1 += mult_elapsed
+            # factor_multiple_time2 += mult_elapsed2
+            # push!(new_factors, conj(factors[j]')*total_H[i][j]*factors[j])
+        end
+        # println(core)
+        # println(new_factors)
+        # time_elapsed = @elapsed begin
+        # display(reconstruct_mat(core, new_factors))
+        init += reconstruct_mat(core, new_factors)
+        # reconstruct_time += time_elapsed
+    end
+    # display(new_factors)
+    return init
+end
 
 
-# ops1 = [sx, Ident, Ident]
+#Test Kdot and Cdot versus matrix versions 
+#Create the Hamiltonian
+# N = 4
+# sites = siteinds("Qubit", N)
+# cutoff = 0.0
+
+# J = -1
+# g = 1.0
+# xxx_ops_list = xxx_ops(N, J, g)
+# total_H = total_H_itensor(xxx_ops_list, sites)
+# ident_ops = [identity_ops(N)]
+# total_H_ident = total_H_itensor(ident_ops, sites)
+
+# A = rand(ComplexF64, collect(fill(2, N))...)
+# core_ten, factors_ten = tucker_itensor(A, sites; cutoff = 0.0)
+# core_arr, factors_arr = tucker(A; cutoff = 0.0)
+
+# M_list, P_list, Y_list = pre_allocate(core_arr, factors_arr)
+# a1 = @ballocated K_evolution_mat(core_arr, factors_arr, 1, xxx_ops_list)
+# a2 = @ballocations K_evolution_itensor(core_ten, factors_ten, 1, total_H, sites)
+
+# alloc_1 = @btimed begin 
+# Kdot1_arr,_, _,_ = K_evolution_mat(core_arr, factors_arr, 1, xxx_ops_list)
+# end 
+
+# N_last = 15
+
+# Kdot_mat_time = zeros(N_last - 1)
+# Cdot_mat_time = zeros(N_last - 1)
+# Kdot_ten_time = zeros(N_last - 1)
+# Cdot_ten_time = zeros(N_last - 1)
+# Kdot_mat_mem = zeros(N_last - 1)
+# Cdot_mat_mem = zeros(N_last - 1)
+# Kdot_ten_mem = zeros(N_last - 1)
+# Cdot_ten_mem = zeros(N_last - 1)
+# Kdot_mat_alloc = zeros(N_last - 1)
+# Cdot_mat_alloc = zeros(N_last - 1)
+# Kdot_ten_alloc = zeros(N_last - 1)
+# Cdot_ten_alloc = zeros(N_last - 1)
+
+# Cdot_full_time = zeros(N_last - 1)
+# Cdot_full_mem = zeros(N_last - 1)
+# Cdot_full_alloc = zeros(N_last - 1)
+
+# p1 = plot(collect(2:N_last), [Kdot_mat_time, Kdot_ten_time], labels = ["Array" "ITensor"], xlabel = "# of qubits", ylabel = "time(s)")
+# p2 = plot(collect(2:N_last), [Kdot_mat_mem, Kdot_ten_mem], labels = ["Array" "ITensor"], xlabel = "# of qubits", ylabel = "memory (bytes)")
+# p3 = plot(collect(2:N_last), [Kdot_mat_alloc, Kdot_ten_alloc], labels = ["Array" "ITensor"], xlabel = "# of qubits", ylabel = "# of allocations")
+# p4 = plot(collect(2:N_last), [Cdot_mat_time, Cdot_ten_time], labels = ["Array" "ITensor"], xlabel = "# of qubits", ylabel = "time(s)", legend =:topleft)
+# plot!(collect(2:13), Cdot_full_time[1:12], label = "ITensor Full", yscale =:log10, legend =:topleft)
+# p5 = plot(collect(2:N_last), [Cdot_mat_mem, Cdot_ten_mem], labels = ["Array" "ITensor"], xlabel = "# of qubits", ylabel = "memory (bytes)", legend =:topleft)
+# plot!(collect(2:13), Cdot_full_mem[1:12], label = "ITensor Full", yscale =:log10, legend =:topleft)
+# p6 = plot(collect(2:N_last), [Cdot_mat_alloc, Cdot_ten_alloc], labels = ["Array" "ITensor"], xlabel = "# of qubits", ylabel = "# of allocations", legend =:topleft)
+# plot!(collect(2:13), Cdot_full_alloc[1:12], label = "ITensor Full", yscale =:log10)
+
+# for N = 2:N_last
+# println("# of sites: $N") 
+# N = 12
+# sites = siteinds("Qubit", N)
+# J = -1
+# g = 1.0
+
+# xxx_ops_list = xxx_ops(N, J, g)
+# total_H = total_H_itensor(xxx_ops_list, sites)
+
+# A = rand(ComplexF64, collect(fill(2, N))...)
+# core_ten, factors_ten = tucker_itensor(A, sites; cutoff = 0.0)
+# core_arr, factors_arr = tucker(A; cutoff = 0.0)
+
+# M_list, P_list, Y_list = pre_allocate(core_arr, factors_arr)
+
+# alloc1 = @btimed begin 
+# Kdot1_arr,_, _,_ = K_evolution_mat(core_arr, factors_arr, 1, $xxx_ops_list)
+# end 
+# alloc1 = @btimed begin 
+#     K_evolution_mat(core_arr, factors_arr, 1, $xxx_ops_list)
+# end
+# Kdot_mat_time[N - 1] = alloc1[2]
+# Kdot_mat_mem[N - 1] = alloc1[3]
+# Kdot_mat_alloc[N - 1] = alloc1[4]
+
+# alloc2 = @btimed begin 
+# Kdot1_ten,_, _,_ = K_evolution_itensor(core_ten, factors_ten, 1, total_H, sites)
+# end
+# Kdot_ten_time[N - 1] = alloc2[2]
+# Kdot_ten_mem[N - 1] = alloc2[3]
+# Kdot_ten_alloc[N - 1] = alloc2[4]
+
+# alloc3 = @btimed begin
+# Cdot_arr = C_dot_im_mat(core_arr, factors_arr, xxx_ops_list)
+# end
+# Cdot_mat_time[N - 1] = alloc3[2]
+# Cdot_mat_mem[N - 1] = alloc3[3]
+# Cdot_mat_alloc[N - 1] = alloc3[4]
+
+# alloc4 = @btimed begin 
+# Cdot_ten = C_dot_itensor_im(core_ten, factors_ten, total_H, sites)
+# end
+# Cdot_ten_time[N - 1] = alloc4[2]
+# Cdot_ten_mem[N - 1] = alloc4[3]
+# Cdot_ten_alloc[N - 1] = alloc4[4]
+
+    # if N < 11
+# H_mat = xxx(N, J, g)
+# H_ten = ITensor(H_mat, sites, sites')
+# alloc5 = @btimed begin
+# inter_C = $H_ten*reconstruct(core_ten,factors_ten)
+# Cdot = reconstruct(inter_C, conj_factors2(factors_ten))
+# end
+# Cdot_full_time[N - 1] = alloc5[2]
+# Cdot_full_mem[N - 1] = alloc5[3]
+# Cdot_full_alloc[N - 1] = alloc5[4]
+    # end
+    # println("N: $N")
+    # println("Mat Alloc: ", alloc_1.memory + alloc3.memory)
+    # println("Ten Alloc: ", alloc2.memory + alloc4.memory)
+    # println("Mat Time: ", alloc_1.time + alloc3.time)
+    # println("Ten Time: ", alloc2.time + alloc4.time)
+
+# timing(3)
+
+# alloc_1 = @belapsed begin 
+# Kdot1_arr,_, _,_ = K_evolution_mat(core_arr, factors_arr, 1, xxx_ops_list)
+# end 
+
+# alloc2 = @belapsed begin 
+# Kdot1_ten,_, _,_ = K_evolution_itensor(core_ten, factors_ten, 1, total_H, sites)
+# end
+
+# # @btime begin 
+# # 
+# # end 
+
+# alloc3 = @belapsed begin
+# Cdot_arr = C_dot_im_mat(core_arr, factors_arr, xxx_ops_list)
+# end
+
+# alloc4 = @belapsed begin 
+# Cdot_ten = C_dot_itensor_im(core_ten, factors_ten, total_H, sites)
+# end
+#Display Kdot 
+# println("Kdot ITensor: ")
+# display(Array(Kdot1_ten, inds(Kdot1_ten)))
+# println("Kdot Mat: ")
+# display(Kdot1_arr)
+
+# println("Norm difference Kdot: ", norm(Array(Kdot1_ten, inds(Kdot1_ten)) - Kdot1_arr))
+# println("Norm difference Cdot: ", norm(Array(Cdot_ten, inds(Cdot_ten)) - Cdot_arr))
+# # ops1 = [sx, Ident, Ident]
 # ops2 = [Ident, sx, Ident]
 # ops1_itensor = op_itensor_list(ops1, sites)
 # ops2_itensor = op_itensor_list(ops2, sites)
@@ -250,14 +787,18 @@ end
 # # Kdot_ten = K_evolution_itensor(core, factors, 1, K1_mat, total_H, sites)
 
 # #Compare result to code in bug_step
-xxx_ops_list = xxx_ops(N, 1, 1)
-total_H_xxx = total_H_itensor(xxx_ops_list, sites)
+# xxx_ops_list = xxx_ops(N, 1, 1)
+# total_H_xxx = total_H_itensor(xxx_ops_list, sites)
 
-H_mat = xxx(N, 1, 1)
-H_ten = ITensor(H_mat, sites, sites')
+# H_mat = xxx(N, 1, 1)
+# H_ten = ITensor(H_mat, sites, sites')
 # @btime begin
 # core_f,factors_f = bug_step_itensor(H_ten, core, factors, 0.01, sites)
 # end
+
+# core_f, factors_f = bug_step_itensor(H_ten, core, factors, 0.01, sites)
+
+# Kdot2 = K_evolution_itensor(core, factors, 1, K2, total_H_xxx, sites)
 
 # @btime begin 
 # Kdot1 = K_evolution_itensor(core, factors, 1, K1, total_H_xxx, sites)
@@ -268,15 +809,47 @@ H_ten = ITensor(H_mat, sites, sites')
 #Now test the Cdot function 
 #First create the "inefficient"? way to do it 
 # @btime begin 
-inter_C = H_ten*reconstruct(core,factors)
-Cdot = reconstruct(inter_C, conj_factors2(factors))
+# inter_C = H_ten*reconstruct(core,factors)
+# Cdot = reconstruct(inter_C, conj_factors2(factors))
 # end
 #Now test the "efficient"? way 
 # @btime begin
-@btime begin
-Cdot_eff, reconstruct_time, mult_time, mult_time2 = C_dot_itensor(core, factors, total_H_xxx, sites)
-println("reconstruct_time: ", reconstruct_time)
-println("factor_multiple time: ", mult_time)
-println("factor_multiple time2: ", mult_time2)
-end
+# @btime begin
+# Cdot_eff= C_dot_itensor_eff(core, factors, total_H_xxx, xxx_ops_list,sites)
+# Cdot_eff = C_dot_itensor(core, factors, total_H_xxx, sites)
+# end
+# println("reconstruct_time: ", reconstruct_time)
+# println("factor_multiple time: ", mult_time)
+# println("factor_multiple time2: ", mult_time2)
+# end
 # println("Norm difference: ", norm(Cdot - Cdot_eff))
+
+# println("'Slow' Runtime")
+# @btime begin  
+# core_f, factors_f = bug_step_itensor(H_ten, core, factors, 0.01, sites)
+# end 
+ 
+# println("'Fast' Runtime")
+# @btime begin
+# core_eff, factors_eff = bug_step_eff(total_H_xxx, core, factors, 0.01, sites)
+# end
+
+# println("End")
+# for i in 1:N 
+#     println("Norm Difference Factors: ", norm(Array(factors_f[i], inds(factors_f[i])) - Array(factors_eff[i], inds(factors_eff[i]))))
+# end
+# println("Norm Difference Core: ", norm(Array(core_f, inds(core_f)) - Array(core_eff, inds(core_eff))))
+
+# q_state = [0,0,1]
+# init_core, init_factors = tucker_separable(sites, q_state)
+# init_mps = init_separable(sites, q_state)
+# init_vec = ComplexF64.(vectorize_mps(init_mps, order = "reverse"))
+# t0 = 0.0
+# T = 1.0
+# steps = 100
+# h = (T - t0)/steps
+# init_update = exp(-im*H_mat*(T - t0))*init_vec
+# final_core, final_factors, _ = bug_integrator_itensor_ra(H_ten, init_core, init_factors, t0, T, steps, sites, 0.0)
+
+# println("Norm difference: ", norm(init_update - vec_itensor(reconstruct(final_core, final_factors); order = "reverse")))
+

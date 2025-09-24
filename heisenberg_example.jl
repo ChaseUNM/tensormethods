@@ -13,7 +13,7 @@ ITensors.set_warn_order(20)
 #Define Hamiltonian 
 
 #Specify number of sites and create indices for sites
-N = 4
+N = 6
 sites = siteinds("Qubit", N)
 #Set parameters for Hamiltonian
 J = 1.0
@@ -21,15 +21,26 @@ U = 0.0
 hj_list = 0*rand(N)
 hp_list = 0*rand(N)
 
+g = 1
+J = 1
+
+xxx_ops_list = xxx_ops(N, g, J)
+total_H_xxx = total_H_itensor(xxx_ops_list, sites)
+
+H = xxx(N, 1, 1)
+H_ten = ITensor(H, sites, sites')
+
+
 #Create matrix form of Hamiltonian
-H = graziani_H(N, J, U, hj_list, hp_list)
+# H = graziani_H(N, J, U, hj_list, hp_list)
 #Create MPO for Hamiltonian
-H_MPO = graziani_H_MPO(N, sites, J, U, hj_list, hp_list)
+# H_MPO = graziani_H_MPO(N, sites, J, U, hj_list, hp_list)
+H_MPO = xxx_mpo(N, sites, J, g)
 #Create tensor form of Hamiltonian for BUG
-H_ten = ITensor(H, reverse(sites), reverse(sites)')
+# H_ten = ITensor(H, reverse(sites), reverse(sites)')
 
 #Specify initial state
-q_state = [0,0,1,1]
+q_state = [0,0,0,1,1,1]
 
 #Plots heatmap using TDVP2 method, compares evolution to matrix exponentiation
 function magnet_heatmap_TDVP2(t0,T, steps, cutoff)
@@ -125,9 +136,15 @@ function magnet_heatmap(t0, T, steps, cutoff)
         # init_vec_copy = exp(-im*H*h)*init_vec_copy
     end
     _,magnet_history_mps,_ = tdvp2_constant_magnet(H_MPO, init_mps, t0,T,steps, cutoff)
-    _,_,magnet_history_tucker,_ = bug_integrator_itensor_ra_magnet(H_ten, init_core,init_factors, t0, T, steps, sites, cutoff)
+    _,_,magnet_history_tucker = bug_integrator_itensor_ra_magnet(H_ten, init_core,init_factors, t0, T, steps, sites, 0.0)
     return magnet_history_exp, magnet_history_mps, magnet_history_tucker 
 end
+
+xxx_ops_list = xxx_ops(N, 1, 1)
+total_H_xxx = total_H_itensor(xxx_ops_list, sites)
+
+H = xxx(N, 1, 1)
+H_ten = ITensor(H, sites, sites')
 
 t0 = 0.0
 T = 10.0
@@ -146,6 +163,6 @@ exp_heatmap = heatmap(x, y, mag_exp, c=:bluesreds, ylabel = "Site Index", xlabel
 mps_heatmap = heatmap(x, y, mag_mps, c=:bluesreds, yflip = true; colorrange = (-1,1))
 tucker_heatmap = heatmap(x, y, mag_tucker, c=:bluesreds, yflip = true; colorrange = (-1,1))
 
-mps_diff = heatmap(x, y, abs.(mag_exp - mag_mps), c=:bluesreds, yflip = true)
+# mps_diff = heatmap(x, y, abs.(mag_exp - mag_mps), c=:bluesreds, yflip = true)
 
 # tucker_diff = heatmap(x, y, abs.(mag_exp - mag_tucker), c=:bluesreds, yflip = true)

@@ -181,7 +181,7 @@ function vec_itensor(tensor::ITensor; order = "natural")
             index = tuple_index_natural(i, size_vec)
             vec_tensor[i] = tensor_array[index...,]
         elseif order == "reverse"
-            index = tuple_index_natural(i, size_vec)
+            index = tuple_index_reverse(i, size_vec)
             vec_tensor[i] = tensor_array[index...,]
         end
     end

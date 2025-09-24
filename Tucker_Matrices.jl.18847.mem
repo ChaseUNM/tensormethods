@@ -1,0 +1,362 @@
+        - using LinearAlgebra, BenchmarkTools
+        - 
+        - 
+        - include("BUG_tucker(8-27).jl")
+        - #todo: be able to do this without ITensor.jl 
+        - 
+        - 
+        - #Need to able to calculate TTM, with that comes proper unfolding and SVD 
+        - 
+        - """
+        -     TTM(tensor::Array, matrix::Array, mode::Int64)
+        - 
+        - Performs the Tensor Times Matrix (TTM) operation along the specified mode.
+        - 
+        - # Arguments
+        - - `tensor::Array`: The input tensor to be multiplied.
+        - - `matrix::Array`: The matrix to multiply with the tensor along the given mode.
+        - - `mode::Int64`: The mode (dimension) along which to perform the multiplication.
+        - 
+        - # Returns
+        - - `Y::Array`: The resulting tensor after the TTM operation.
+        - """
+        - function TTM(tensor::AbstractArray, matrix::AbstractMatrix, mode::Int)
+     2640     tensor_dim = collect(size(tensor))
+        0     d = length(tensor_dim)
+        0     mat_row, mat_col = size(matrix)
+        0     if mode == 1
+        0         M = tensor_dim[1]
+      880         P = copy(tensor_dim)
+        0         deleteat!(P, 1)
+        0         col = Int(prod(size(tensor)) / size(tensor, 1))
+        0         row = size(tensor, 1)
+     2816         Y = matrix * reshape(tensor, row, col)
+      288         return reshape(Y, mat_row, P...)
+        -     else
+     1584         M = prod(tensor_dim[1:mode - 1])
+     1056         P = prod(tensor_dim[mode + 1:d])
+      528         X_bar = reshape(tensor, M, tensor_dim[mode], P)
+     4576         Y_bar = similar(X_bar, M, size(matrix, 1), P)
+        -         matT = transpose(matrix)
+        0         @views for l = 1:P
+        0             mul!(Y_bar[:, :, l], X_bar[:, :, l], matT)
+        0         end
+     3280         return reshape(Y_bar, tensor_dim[1:mode - 1]..., mat_row, tensor_dim[mode + 1:d]...)
+        -     end
+        - end
+        - function Multi_TTM(tensor::Array, matrices::Vector{<:AbstractMatrix})
+     2080     Y = copy(tensor)
+        0     for i in 1:length(matrices)
+        0         Y = TTM(Y, matrices[i], i)
+        0     end
+        0     return Y 
+        - end
+        - 
+        - function trim_by_tolerance(v::Vector{T}, tol::Real) where T<:Real
+        -     idx = length(v)
+        -     s = zero(T)
+        -     println("Vector: ", v)
+        -     while idx >= 1
+        -         s += v[idx]^2
+        -         if s >= tol^2
+        -             break
+        -         end
+        -         idx -= 1
+        -     end
+        -     println("Trimmed to rank: ", idx)
+        -     return idx
+        - end
+        - 
+        - function trim_by_tolerance(v::Vector{T}, tol::Real) where T<:Real
+        -     idx = length(v)
+        -     s = zero(T)
+        -     v = v/norm(v)
+        -     count = 0 
+        -     while idx >= 1 
+        -         
+        -         s += v[idx]^2
+        -         
+        -         if s > tol 
+        -             break
+        -         end
+        -         idx -= 1
+        -         count += 1
+        -     end
+        -     return idx
+        - end
+        - 
+        - 
+        - 
+        - function matricization(tensor::Array, mode::Int64)
+        0     if mode == 1 
+      144         return reshape(tensor, size(tensor)[1], Int64(prod(size(tensor))/size(tensor)[1]))
+        -     else
+        -         # A = permutedims(tensor, (mode, reverse(setdiff(1:ndims(tensor), mode))...))
+      256         A = permutedims(tensor, (mode, setdiff(1:ndims(tensor), mode)...))
+        -         # A = permutedims(tensor, (setdiff(1:ndims(tensor), mode)..., mode))
+        -         # println("A size: ", size(A))
+        -         # return reshape(A, size(tensor, mode), Int64(prod(size(tensor))/size(tensor, mode)))
+       96         return reshape(A, size(tensor, mode), Int64(prod(size(tensor))/size(tensor, mode)))
+        -     end
+        - end
+        - 
+        - function refold_mat(mat::Array, original_dim::Tuple{Vararg{Int64}}, mode::Int64)
+        -     d = length(original_dim)
+        0     if mode == 1
+       48         return reshape(mat, original_dim)
+        -     else
+        0         perm = (mode, setdiff(1:d, mode)...)
+        0         tensor_perm = reshape(mat, (original_dim[mode], original_dim[setdiff(1:d, mode)]...))
+        -         # return tensor_perm 
+        0         return permutedims(tensor_perm, invperm(perm))
+        -     end
+        - end
+        - 
+        - function LLSV(Y::Array; cutoff::Union{Nothing,Float64}=nothing, target_rank::Union{Nothing,Int64}=nothing)
+        0     U, S, Vt = svd(Y)
+        -     if (cutoff === nothing) == (target_rank === nothing)
+        -         error("Specify either cutoff or target_rank, but not both.")
+        -     end
+        -     if cutoff !== nothing
+        0         rank = trim_by_tolerance(S, cutoff)
+        -         # println("Truncated rank by cutoff: ", rank)
+        -     else
+        -         rank = target_rank
+        -     end
+        -     # println("Chosen rank: ", rank)
+        0     W = U[:, 1:rank]
+      192     err = sqrt(sum(S[rank+1:end].^2))
+        0     return W, err
+        - end
+        - 
+        0 function tucker(tensor::Array; cutoff::Union{Nothing,Float64}=nothing, target_rank::Union{Nothing,Vector{Int64}}=nothing)
+        -     d = length(size(tensor))
+        -     if target_rank === nothing
+       64         target_rank_vec = fill(nothing, d)
+        -     else
+        -         target_rank_vec = target_rank
+        -     end
+       32     U_list = Matrix{eltype(tensor)}[]
+      208     core = copy(tensor)
+      208     core_copy = copy(tensor)
+       80     err_list = zeros(d)
+        0     cutoff_bar = cutoff !== nothing ? cutoff*norm(tensor)/sqrt(d) : nothing
+        0     for i in 1:d
+        0         U, err = LLSV(matricization(core_copy, i); cutoff = cutoff, target_rank = target_rank_vec[i])
+        0         push!(U_list, U)
+        0         err_list[i] = err
+      432         core = TTM(core, Array(U'), i)
+        0     end
+       80     total_err = sqrt(sum(err_list.^2))
+      160     return core, U_list, total_err
+        - end
+        - 
+        - function tucker_sequential(tensor::Array; cutoff::Union{Nothing,Float64}=nothing, target_rank::Union{Nothing,Vector{Int64}}=nothing)
+        -     d = length(size(tensor))
+        -     if target_rank === nothing
+        -         target_rank_vec = fill(nothing, d)
+        -     else
+        -         target_rank_vec = target_rank
+        -     end
+        -     U_list = Matrix{eltype(tensor)}[]
+        -     core = copy(tensor)
+        -     err_list = zeros(d)
+        -     cutoff_bar = cutoff !== nothing ? cutoff*norm(tensor)/sqrt(d) : nothing
+        -     for i in 1:d
+        -         U, err = LLSV(matricization(core, i); cutoff = cutoff, target_rank = target_rank_vec[i])
+        -         push!(U_list, U)
+        -         err_list[i] = err
+        -         core = TTM(core, Array(U'), i)
+        -     end
+        -     total_err = sqrt(sum(err_list.^2))
+        -     return core, U_list, total_err
+        - end
+        - 
+        - #Test that refold and matricization are inverses
+        - # A = rand(ComplexF64, 4,5,6,4)
+        - # for mode in 1:4
+        - #     A_mat = matricization(A, mode)
+        - #     A_refold = refold(A_mat, size(A), mode)
+        - #     println("Norm difference matricization and refold mode $mode: ", norm(A - A_refold))
+        - # end
+        - 
+        - #Test Tucker decomposition
+        - # truncation_cutoff = 1E-1
+        - # A = rand(ComplexF64, 4,5,6)
+        - # A = zeros(2, 3, 3)
+        - # A[:,:,1] = [-1 -2 -3; -4 -5 -6]
+        - # A[:,:,2] = [1 2 3; 4 5 6]
+        - # A[:,:,3] = [7 8 9; 10 11 12]
+        - 
+        - # core, U_list, err = tucker(A; cutoff = truncation_cutoff)
+        - 
+        - # #Compare with ITensor.jl
+        - # using ITensors
+        - # i = Index(4; tags="i")
+        - # j = Index(5; tags="j")
+        - # k = Index(6; tags="k")
+        - # sites = [i,j,k]
+        - # A_itensor = ITensor(A, i,j,k)
+        - 
+        - # core_iten, factors_iten = tucker_itensor(A_itensor;cutoff = truncation_cutoff)
+        - 
+        - # #Compare results
+        - # A_reconstructed = Multi_TTM(core, U_list)
+        - # println("Norm difference Tucker: ", norm(A - A_reconstructed))
+        - 
+        - # #Compare now with itensor 
+        - # A_iten_reconstructed = core_iten*factors_iten[1]*factors_iten[2]*factors_iten[3]
+        - # A_iten_reconstructed = permute(A_iten_reconstructed, (i,j,k))
+        - # println("Norm difference Tucker with ITensor.jl: ", norm(A - Array(A_iten_reconstructed, inds(A_iten_reconstructed))))
+        - 
+        - # #Now compare cores and factors between the two methods
+        - # println("Norm difference cores: ", norm(core - Array(core_iten, inds(core_iten))))
+        - # for n in 1:3
+        - #     println("Norm difference factor $n: ", norm(U_list[n] - Array(factors_iten[n], inds(factors_iten[n]))))
+        - # end
+        - 
+        - #Test Multi_TTM
+        - # A = rand(ComplexF64, 2,3,4)
+        - # B = rand(ComplexF64, 5,2)
+        - # C = rand(ComplexF64, 6,3)
+        - # D = rand(ComplexF64, 7,4)
+        - # @btime begin 
+        - # A_new = Multi_TTM(A, [B,C,D])
+        - # end
+        - # #Test with sequential TTM
+        - # A_new2 = TTM(TTM(TTM(A, B, 1), C, 2), D, 3)
+        - # println("Norm difference Multi_TTM: ", norm(A_new - A_new2))
+        - # #Now test with ITensor.jl
+        - # using ITensors
+        - # i = Index(2; tags="i")
+        - # j = Index(3; tags="j")
+        - # k = Index(4; tags="k")
+        - # l = Index(5; tags="l")
+        - # m = Index(6; tags="m")
+        - # n = Index(7; tags="n")
+        - # A_itensor = ITensor(A, i,j,k)
+        - # B_itensor = ITensor(B, l,i)
+        - # C_itensor = ITensor(C, m,j)
+        - # D_itensor = ITensor(D, n,k)
+        - # @btime begin 
+        - # A_itensor_new = A_itensor*B_itensor*C_itensor*D_itensor
+        - # end
+        - # A_itensor_new = permute(A_itensor_new, (l,m,n))
+        - # println("Norm difference Multi_TTM with ITensor.jl: ", norm(A_new - Array(A_itensor_new, inds(A_itensor_new))))
+        - 
+        - 
+        - #Test TTM compared to ITensor.jl TTM 
+        - # using ITensors
+        - # A = rand(ComplexF64, 2,3,4)
+        - # B = rand(ComplexF64, 5,3)
+        - # C = rand(ComplexF64, 6,2)
+        - # i = Index(2; tags="i")
+        - # j = Index(3; tags="j")
+        - # k = Index(4; tags="k")
+        - # l = Index(5; tags="l")
+        - # m = Index(6; tags="m")
+        - # A_itensor = ITensor(A, i,j,k)
+        - # B_itensor = ITensor(B, l,j)
+        - # C_itensor = ITensor(C, m,i)
+        - # #Test TTM on mode 1
+        - # A_new = TTM(A, C, 1)
+        - # A_itensor_new = A_itensor*C_itensor
+        - # A_itensor_new = permute(A_itensor_new, (m,j,k))
+        - # println("Norm difference TTM mode 1: ", norm(A_new - Array(A_itensor_new, inds(A_itensor_new))))
+        - # #Test TTM on mode 2
+        - # A_new2 = TTM(A, B, 2)
+        - # A_itensor_new2 = A_itensor*B_itensor
+        - # A_itensor_new2 = permute(A_itensor_new2, (i,l,k))
+        - # println("Norm difference TTM mode 2: ", norm(A_new2 - Array(A_itensor_new2, inds(A_itensor_new2))))
+        - # #Test TTM on mode 3
+        - # D = rand(ComplexF64, 7,4)
+        - # n = Index(7; tags="n")
+        - # A_new3 = TTM(A, D, 3)
+        - # D_itensor = ITensor(D, n,k)
+        - # A_itensor_new3 = A_itensor*D_itensor
+        - # A_itensor_new3 = permute(A_itensor_new3, (i,j,n))
+        - # println("Norm difference TTM mode 3: ", norm(A_new3 - Array(A_itensor_new3, inds(A_itensor_new3))))
+        - 
+        - # #Now try with order 4 tensor 
+        - # A4 = rand(ComplexF64, 2,3,4,5)
+        - # B4 = rand(ComplexF64, 6,2)
+        - # C4 = rand(ComplexF64, 7,3)
+        - # D4 = rand(ComplexF64, 8,4)
+        - # E4 = rand(ComplexF64, 9,5)
+        - # i4 = Index(2; tags="i4")
+        - # j4 = Index(3; tags="j4")
+        - # k4 = Index(4; tags="k4")
+        - # l4 = Index(5; tags="l4")
+        - # m4 = Index(6; tags="m4")
+        - # n4 = Index(7; tags="n4")
+        - # o4 = Index(8; tags="o4")
+        - # p4 = Index(9; tags="p4")
+        - # A4_itensor = ITensor(A4, i4,j4,k4,l4)
+        - # B4_itensor = ITensor(B4, m4,i4)
+        - # C4_itensor = ITensor(C4, n4,j4)
+        - # D4_itensor = ITensor(D4, o4,k4)
+        - # E4_itensor = ITensor(E4, p4,l4)
+        - # #Test TTM on mode 1
+        - # @btime begin 
+        - # A4_new = TTM(A4, B4, 1)
+        - # end 
+        - # @btime begin 
+        - # A4_itensor_new = A4_itensor*B4_itensor
+        - # end
+        - # # A4_itensor_new = permute(A4_itensor_new, (m4,j4,k4,l4))
+        - # # println("Norm difference TTM mode 1 (order 4): ", norm(A4_new - Array(A4_itensor_new, inds(A4_itensor_new))))
+        - # #Test TTM on mode 2
+        - # @btime begin
+        - # A4_new2 = TTM(A4, C4, 2)
+        - # end
+        - # println("End")
+        - # @btime begin
+        - # A4_itensor_new2 = A4_itensor*C4_itensor
+        - # end
+        - # # A4_itensor_new2 = permute(A4_itensor_new2, (i4,n4,k4,l4))
+        - # # println("Norm difference TTM mode 2 (order 4): ", norm(A4_new2 - Array(A4_itensor_new2, inds(A4_itensor_new2))))
+        - # #Test TTM on mode 3
+        - # @btime begin
+        - # A4_new3 = TTM(A4,D4, 3)
+        - # end
+        - # @btime begin
+        - # A4_itensor_new3 = A4_itensor*D4_itensor
+        - # end
+        - # # A4_itensor_new3 = permute(A4_itensor_new3, (i4,j4,o4,l4))
+        - # # println("Norm difference TTM mode 3 (order 4): ", norm(A4_new3 - Array(A4_itensor_new3, inds(A4_itensor_new3))))
+        - # #Test TTM on mode 4
+        - # @btime begin
+        - # A4_new4 = TTM(A4, E4, 4)
+        - # end
+        - # @btime begin
+        - # A4_itensor_new4 = A4_itensor*E4_itensor
+        - # end
+        - # A4_itensor_new4 = permute(A4_itensor_new4, (i4,j4,k4,p4))
+        - # println("Norm difference TTM mode 4 (order 4): ", norm(A4_new4 - Array(A4_itensor_new4, inds(A4_itensor_new4))))    
+        - 
+        - 
+        - #Test Multi_TTM with Multi_TTM versus ITensor method 
+        - # A4 = rand(ComplexF64, 2,3,4,5)
+        - # B4 = rand(ComplexF64, 6,2)
+        - # C4 = rand(ComplexF64, 7,3)
+        - # D4 = rand(ComplexF64, 8,4)
+        - # E4 = rand(ComplexF64, 9,5)
+        - # i4 = Index(2; tags="i4")
+        - # j4 = Index(3; tags="j4")
+        - # k4 = Index(4; tags="k4")
+        - # l4 = Index(5; tags="l4")
+        - # m4 = Index(6; tags="m4")
+        - # n4 = Index(7; tags="n4")
+        - # o4 = Index(8; tags="o4")
+        - # p4 = Index(9; tags="p4")
+        - # A4_itensor = ITensor(A4, i4,j4,k4,l4)
+        - # B4_itensor = ITensor(B4, m4,i4)
+        - # C4_itensor = ITensor(C4, n4,j4)
+        - # D4_itensor = ITensor(D4, o4,k4)
+        - # E4_itensor = ITensor(E4, p4,l4)
+        - 
+        - # A4_new = Multi_TTM(A4, [B4,C4,D4,E4])
+        - # A4_itensor_new = A4_itensor*B4_itensor*C4_itensor*D4_itensor*E4_itensor
+        - 
+        - # A4_itensor_new = permute(A4_itensor_new, (m4,n4,o4,p4))
+        - # println("Norm difference Multi_TTM (order 4): ", norm(A4_new - Array(A4_itensor_new, inds(A4_itensor_new))))
